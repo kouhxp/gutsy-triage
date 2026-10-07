@@ -78,7 +78,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6
       id: py
       with:
         python-version: "3.12"
@@ -100,13 +100,13 @@ runs:
 
     - name: Restore runtime cache
       id: venv
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/gutsy-triage/venv
         key: gutsy-venv-${{ runner.os }}-${{ runner.arch }}-py${{ steps.py.outputs.python-version }}-${{ steps.src.outputs.sha }}
 
     - name: Restore model cache
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/gutsy-triage/models
         key: gutsy-model-${{ inputs.model }}
