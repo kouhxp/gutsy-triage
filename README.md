@@ -90,7 +90,7 @@ on `127.0.0.1`. It sends the issue title and body as the *state* and one `choice
 options are your labels, then multiplies each option's probability by 1 − `reject` (gutsy's "none
 of these fit" score), so a vague issue gets low numbers everywhere instead of a confident wrong label.
 
-A whole job takes about 35 s on a standard `ubuntu-latest` runner, measured without any cache, including installing the runtime and downloading the model. Timings vary with runner load and issue length.
+On a standard `ubuntu-latest` runner a triage run takes about 40 s end to end without a cache, including installing the runtime and downloading the model, and about 25 s once the cache is warm. Timings vary with runner load and issue length.
 
 **Caching.** Anyone can trigger an `issues` run by filing an issue, so GitHub gives those runs read-only cache access to prevent cache poisoning. The action respects that: issue runs only restore the cache, and trusted runs such as the evaluate and backfill workflows (`workflow_dispatch`) save it. Run either one once and later issue runs skip the install and the model download. No extra permission is needed.
 
