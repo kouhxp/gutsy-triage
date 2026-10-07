@@ -98,18 +98,36 @@ runs:
         echo "sha=$(git -C "$src" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         echo "src=$src" >> "$GITHUB_OUTPUT"
 
+    # Issue-triggered runs get read-only cache access (cache-mode: read), so the action
+    # only restores here. Trusted runs (workflow_dispatch, push, schedule) save below.
+    - name: Check cache access
+      id: cachemode
+      shell: bash
+      run: |
+        mode="${ACTIONS_CACHE_MODE:-write}"
+        case "$mode" in write|write-only) w=true ;; *) w=false ;; esac
+        echo "Cache mode: $mode (save: $w)"
+        echo "writable=$w" >> "$GITHUB_OUTPUT"
+        echo "venv-key=gutsy-venv-${RUNNER_OS}-${RUNNER_ARCH}-py${PY_VERSION}-${SHA}" >> "$GITHUB_OUTPUT"
+        echo "model-key=gutsy-model-${MODEL}" >> "$GITHUB_OUTPUT"
+      env:
+        PY_VERSION: ${{ steps.py.outputs.python-version }}
+        SHA: ${{ steps.src.outputs.sha }}
+        MODEL: ${{ inputs.model }}
+
     - name: Restore runtime cache
       id: venv
-      uses: actions/cache@v5
+      uses: actions/cache/restore@v5
       with:
         path: ~/.cache/gutsy-triage/venv
-        key: gutsy-venv-${{ runner.os }}-${{ runner.arch }}-py${{ steps.py.outputs.python-version }}-${{ steps.src.outputs.sha }}
+        key: ${{ steps.cachemode.outputs.venv-key }}
 
     - name: Restore model cache
-      uses: actions/cache@v5
+      id: modelcache
+      uses: actions/cache/restore@v5
       with:
         path: ~/.cache/gutsy-triage/models
-        key: gutsy-model-${{ inputs.model }}
+        key: ${{ steps.cachemode.outputs.model-key }}
 
     - name: Install gutsy-inference
       if: steps.venv.outputs.cache-hit != 'true'
@@ -143,6 +161,20 @@ runs:
           "$work/models.json" \
           "$MODEL"
         echo "work=$work" >> "$GITHUB_OUTPUT"
+
+    - name: Save runtime cache
+      if: steps.cachemode.outputs.writable == 'true' && steps.venv.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ~/.cache/gutsy-triage/venv
+        key: ${{ steps.cachemode.outputs.venv-key }}
+
+    - name: Save model cache
+      if: steps.cachemode.outputs.writable == 'true' && steps.modelcache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ~/.cache/gutsy-triage/models
+        key: ${{ steps.cachemode.outputs.model-key }}
 
     - name: Start gutsy
       shell: bash
