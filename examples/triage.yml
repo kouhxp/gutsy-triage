@@ -1,0 +1,17 @@
+# .github/workflows/triage.yml — label every new issue
+name: Triage issues
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kouhxp/gutsy-triage@v1
+        with:
+          threshold: "0.6"            # set this from the evaluate run below
+          fallback-label: needs-triage # optional: flag the ones gutsy isn't sure about

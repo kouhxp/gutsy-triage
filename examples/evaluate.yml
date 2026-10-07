@@ -1,0 +1,19 @@
+# .github/workflows/gutsy-evaluate.yml — measure accuracy on your own labeled issues first
+name: Evaluate gutsy triage
+on:
+  workflow_dispatch:
+    inputs:
+      issues:
+        description: How many labeled issues to score
+        default: "100"
+
+permissions:
+  issues: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kouhxp/gutsy-triage@v1
+        with:
+          evaluate: ${{ inputs.issues }}

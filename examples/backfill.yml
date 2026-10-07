@@ -1,0 +1,25 @@
+# .github/workflows/gutsy-backfill.yml — label the existing backlog (dry run by default)
+name: Backfill issue labels
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Report only, write nothing
+        type: boolean
+        default: true
+      limit:
+        default: "50"
+
+permissions:
+  issues: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kouhxp/gutsy-triage@v1
+        with:
+          issues: unlabeled
+          limit: ${{ inputs.limit }}
+          dry-run: ${{ inputs.dry-run }}
+          comment: never

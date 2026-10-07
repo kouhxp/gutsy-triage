@@ -1,0 +1,183 @@
+name: gutsy issue triage
+description: Label new issues with a local 0.8B model on the runner. No API key, no per-issue cost, issue text never leaves GitHub.
+author: kouhxp
+branding:
+  icon: tag
+  color: orange
+
+inputs:
+  github-token:
+    description: "Token used to read issues and write labels/comments. Needs `issues: write`."
+    default: ${{ github.token }}
+  labels:
+    description: >
+      Candidate labels, one per line, optionally `name = description`. A JSON object
+      {"name": "description"} also works. Empty means every label in the repository
+      (minus exclude-labels), using each label's own description.
+    default: ""
+  exclude-labels:
+    description: Labels never to apply (one per line). Defaults to labels the issue text can't tell you.
+    default: |
+      duplicate
+      wontfix
+      invalid
+      good first issue
+      help wanted
+  threshold:
+    description: Minimum calibrated probability (0-1) before a label is applied. Measure yours with `evaluate`.
+    default: "0.6"
+  multi-label:
+    description: Also ask a yes/no question per label and apply every label above multi-threshold.
+    default: "false"
+  multi-threshold:
+    description: Minimum yes-probability for extra labels in multi-label mode.
+    default: "0.85"
+  fallback-label:
+    description: Label to apply when nothing clears the threshold (e.g. `needs-triage`). Empty applies nothing.
+    default: ""
+  skip-if-labeled:
+    description: Leave issues alone that already carry one of the candidate labels.
+    default: "true"
+  comment:
+    description: "`labeled` (comment when a label is applied), `always`, or `never`."
+    default: labeled
+  dry-run:
+    description: Classify and report, but don't write labels or comments.
+    default: "false"
+  issues:
+    description: >
+      Which issues to triage. Empty means the issue from the triggering event.
+      `unlabeled` means open issues with no candidate label. Or a comma-separated list of numbers.
+    default: ""
+  limit:
+    description: Maximum issues to process when `issues` is `unlabeled`.
+    default: "50"
+  evaluate:
+    description: >
+      If above 0, write nothing: classify that many already-labeled issues and report
+      accuracy and coverage at each threshold, so you can pick one from your own data.
+    default: "0"
+  model:
+    description: Model file stem from the kouhxp/gutsy Hugging Face repo (`gutsy-0.8b-v04-q4_k_m` or `gutsy-0.8b-v04-q8_0`).
+    default: gutsy-0.8b-v04-q4_k_m
+  gutsy-ref:
+    description: Git ref of kouhxp/gutsy to install the runtime from.
+    default: main
+
+outputs:
+  label:
+    description: First label applied to the (single) triaged issue, empty if none.
+    value: ${{ steps.triage.outputs.label }}
+  probability:
+    description: Calibrated probability of that label.
+    value: ${{ steps.triage.outputs.probability }}
+  results:
+    description: JSON array with the full result for every processed issue.
+    value: ${{ steps.triage.outputs.results }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      id: py
+      with:
+        python-version: "3.12"
+
+    - name: Fetch gutsy runtime
+      id: src
+      shell: bash
+      env:
+        GUTSY_REF: ${{ inputs.gutsy-ref }}
+      run: |
+        set -euo pipefail
+        src="$RUNNER_TEMP/gutsy-src"
+        git init -q "$src"
+        git -C "$src" remote add origin https://github.com/kouhxp/gutsy
+        git -C "$src" fetch -q --depth 1 origin "$GUTSY_REF"
+        git -C "$src" checkout -q FETCH_HEAD
+        echo "sha=$(git -C "$src" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "src=$src" >> "$GITHUB_OUTPUT"
+
+    - name: Restore runtime cache
+      id: venv
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/gutsy-triage/venv
+        key: gutsy-venv-${{ runner.os }}-${{ runner.arch }}-py${{ steps.py.outputs.python-version }}-${{ steps.src.outputs.sha }}
+
+    - name: Restore model cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/gutsy-triage/models
+        key: gutsy-model-${{ inputs.model }}
+
+    - name: Install gutsy-inference
+      if: steps.venv.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        SRC: ${{ steps.src.outputs.src }}
+      run: |
+        set -euo pipefail
+        venv="$HOME/.cache/gutsy-triage/venv"
+        python -m venv "$venv"
+        "$venv/bin/pip" install -q --upgrade pip
+        # Prefer the prebuilt CPU wheel; building llama.cpp from source takes minutes.
+        "$venv/bin/pip" install -q --prefer-binary \
+          --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+          "llama-cpp-python>=0.3.35"
+        "$venv/bin/pip" install -q "$SRC/gutsy-inference" huggingface_hub
+
+    - name: Download model and write models.json
+      id: model
+      shell: bash
+      env:
+        SRC: ${{ steps.src.outputs.src }}
+        MODEL: ${{ inputs.model }}
+      run: |
+        set -euo pipefail
+        work="$RUNNER_TEMP/gutsy-work"
+        mkdir -p "$work" "$HOME/.cache/gutsy-triage/models"
+        "$HOME/.cache/gutsy-triage/venv/bin/python" "$GITHUB_ACTION_PATH/setup_gutsy.py" \
+          "$SRC/gutsy-inference/models.example.json" \
+          "$HOME/.cache/gutsy-triage/models" \
+          "$work/models.json" \
+          "$MODEL"
+        echo "work=$work" >> "$GITHUB_OUTPUT"
+
+    - name: Start gutsy
+      shell: bash
+      working-directory: ${{ steps.model.outputs.work }}
+      run: |
+        set -uo pipefail
+        log="$RUNNER_TEMP/gutsy-server.log"
+        nohup "$HOME/.cache/gutsy-triage/venv/bin/gutsy-inference" serve > "$log" 2>&1 &
+        for _ in $(seq 1 180); do
+          if curl -sf http://127.0.0.1:8765/health > "$RUNNER_TEMP/gutsy-health.json"; then
+            echo "gutsy is up:"; head -c 1500 "$RUNNER_TEMP/gutsy-health.json"; echo
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "::error::gutsy-inference did not become healthy within 180 s"
+        cat "$log"
+        exit 1
+
+    - name: Triage
+      id: triage
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GT_LABELS: ${{ inputs.labels }}
+        GT_EXCLUDE_LABELS: ${{ inputs.exclude-labels }}
+        GT_THRESHOLD: ${{ inputs.threshold }}
+        GT_MULTI_LABEL: ${{ inputs.multi-label }}
+        GT_MULTI_THRESHOLD: ${{ inputs.multi-threshold }}
+        GT_FALLBACK_LABEL: ${{ inputs.fallback-label }}
+        GT_SKIP_IF_LABELED: ${{ inputs.skip-if-labeled }}
+        GT_COMMENT: ${{ inputs.comment }}
+        GT_DRY_RUN: ${{ inputs.dry-run }}
+        GT_ISSUES: ${{ inputs.issues }}
+        GT_LIMIT: ${{ inputs.limit }}
+        GT_EVALUATE: ${{ inputs.evaluate }}
+        GT_MODEL: ${{ inputs.model }}
+      run: python "$GITHUB_ACTION_PATH/triage.py"
